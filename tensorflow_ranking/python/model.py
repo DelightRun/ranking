@@ -417,6 +417,75 @@ class _GroupwiseRankingModel(_RankingModel):
     return logits
 
 
+class _ListwiseRankingModel(_RankingModel):
+  """Ranking model for groupwise scoring functions."""
+
+  def __init__(self, score_fn, list_size, transform_fn=None):
+    """Constructor for groupwise ranking model.
+
+    Args:
+      score_fn: A scoring function for a `list_size` number of examples
+        with the following signature:
+        * Args:
+          `context_features`: A dict of `Tensor`s with shape [batch_size, ...].
+          `example_features`: A dict of `Tensor`s with shape [batch_size,
+            list_size, ...]
+          `mode`: Optional. Specifies if this is training, evaluation or
+            inference. See `ModeKeys`.
+          `params`: Optional dict of hyperparameters, same value passed in the
+            `Estimator` constructor.
+          `config`: Optional configuration object, same value passed in the
+            `Estimator` constructor.
+        * Returns: A Tensor of shape [batch_size, score_size] that contains a
+          score for each example/list, or a `dict` of Tensors with the above shape in
+          multi-task setting.
+      list_size: An integer denoting the number of examples in `score_fn`.
+      transform_fn: See `_RankingModel`.
+
+    Raises:
+      ValueError: when group_size is invalid.
+    """
+    super(_GroupwiseRankingModel, self).__init__(transform_fn)
+    if list_size <= 0:
+      raise ValueError('Invalid list_size %d' % list_size)
+    self._list_size = list_size
+    self._score_fn = score_fn
+
+  def _compute_logits_impl(self, context_features, example_features, labels,
+                           mode, params, config):
+    # Each list are scored by '_score_fn', and return list_size scores.
+    with tf.compat.v1.name_scope('listwise_dnn'):
+      batch_size, list_size, is_valid = _infer_sizes(example_features, labels)
+
+      # Do the inference and get scores for the batch of [batch_size, list_size]
+      with tf.compat.v1.variable_scope('list_score'):
+        scores = self._score_fn(context_features, example_features,
+                                mode, params, config)
+
+      with tf.compat.v1.name_scope('mask_scores'):
+        # Reset invalid scores to 0 based on mask.
+        def _process_scores(task_scores):
+          """A subroutine to mask scores for a single Tensor."""
+          batch_size, score_size = tf.unstack(tf.shape(input=task_scores))
+          if score_size == 1:
+            return task_scores
+          elif score_size == list_size:
+            return tf.compat.v1.where(is_valid,
+                                      task_scores,
+                                      tf.zeros_like(task_scores))
+          else:
+            raise ValueError('Invalid score size=%d, must be 1 or list_size' % score_size)
+
+        if isinstance(scores, dict):
+          logits = {}
+          for name, task_scores in six.iteritems(scores):
+            logits[name] = _process_scores(task_scores)
+        else:
+          logits = _process_scores(scores)
+
+    return logits
+
+
 def _make_model_fn(ranking_model, ranking_head):
   """A helper function to make an `Estimator` model_fn.
 
@@ -466,4 +535,26 @@ def make_groupwise_ranking_fn(group_score_fn,
   tf.compat.v1.logging.info('Building groupwise ranking model.')
   ranking_model = _GroupwiseRankingModel(group_score_fn, group_size,
                                          transform_fn)
+  return _make_model_fn(ranking_model, ranking_head)
+
+
+def make_listwise_ranking_fn(score_fn,
+                             list_size,
+                             ranking_head,
+                             transform_fn=None):
+  """Builds an `Estimator` model_fn for listwise ranking models.
+
+  Args:
+    list_score_fn: See `_ListwiseRankingModel`.
+    list_size: See `_ListwiseRankingModel`.
+    ranking_head: A `head._RankingHead` object.
+    transform_fn: See `_ListwiseRankingModel`.
+
+  Returns:
+    See `_make_model_fn`.
+  """
+
+  tf.compat.v1.logging.info('Building groupwise ranking model.')
+  ranking_model = _ListwiseRankingModel(score_fn, list_size,
+                                        transform_fn)
   return _make_model_fn(ranking_model, ranking_head)
