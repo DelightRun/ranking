@@ -445,7 +445,7 @@ class _ListwiseRankingModel(_RankingModel):
     Raises:
       ValueError: when group_size is invalid.
     """
-    super(_GroupwiseRankingModel, self).__init__(transform_fn)
+    super(_ListwiseRankingModel, self).__init__(transform_fn)
     if list_size <= 0:
       raise ValueError('Invalid list_size %d' % list_size)
     self._list_size = list_size
