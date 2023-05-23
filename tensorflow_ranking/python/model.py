@@ -455,12 +455,12 @@ class _ListwiseRankingModel(_RankingModel):
                            mode, params, config):
     # Each list are scored by '_score_fn', and return list_size scores.
     with tf.compat.v1.name_scope('listwise_dnn'):
-      batch_size, list_size, is_valid = _infer_sizes(example_features, labels)
+      size_info = batch_size, list_size, is_valid = _infer_sizes(example_features, labels)
 
       # Do the inference and get scores for the batch of [batch_size, list_size]
       with tf.compat.v1.variable_scope('list_score'):
         scores = self._score_fn(context_features, example_features,
-                                mode, params, config)
+                                size_info, mode, params, config)
 
       with tf.compat.v1.name_scope('mask_scores'):
         # Reset invalid scores to 0 based on mask.
