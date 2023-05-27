@@ -466,13 +466,12 @@ class _ListwiseRankingModel(_RankingModel):
         # Reset invalid scores to 0 based on mask.
         def _process_scores(task_scores):
           """A subroutine to mask scores for a single Tensor."""
-          dim = len(task_scores.shape)
-          if dim == 1:  # whole list scoring
-            return task_scores
-          else:   # single doc scoring
+          if task_scores.get_shape().with_rank(2):  # single doc scoring
             return tf.compat.v1.where(is_valid,
                                       task_scores,
                                       tf.zeros_like(task_scores))
+          else:   # whole list scoring
+            return task_scores
 
         if isinstance(scores, dict):
           logits = {}
