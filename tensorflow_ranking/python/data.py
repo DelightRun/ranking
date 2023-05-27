@@ -465,9 +465,8 @@ def _get_scalar_default_value(dtype, default_value):
     return 0
   elif isinstance(default_value, int) or isinstance(default_value, float):
     return default_value
-  elif (isinstance(default_value, list) or
-        isinstance(default_value, tuple)) and len(default_value) == 1:
-    return default_value[0]
+  elif isinstance(default_value, list) or isinstance(default_value, tuple):
+    return default_value
   else:
     raise ValueError("Only scalar or equivalent is allowed in default_value.")
 
