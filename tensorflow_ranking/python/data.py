@@ -509,14 +509,19 @@ class _SequenceExampleParser(_RankingDataParser):
     for k, v in six.iteritems(non_trivial_padding_values):
       tensor = examples[k]  # [batch_size, num_frames, feature_size]
       tensor.get_shape().assert_has_rank(3)
+      batch_size = tf.shape(input=tensor)[0]
+      num_frames = tf.shape(input=tensor)[1]
+      feature_size = tf.shape(input=tensor)[2]
+
       size = tf.reshape(sizes[k], [-1, 1, 1])  # [batch_size, 1, 1]
-      rank = tf.reshape(
-          tf.tile(
-              tf.range(tf.shape(input=tensor)[1]), [tf.shape(input=tensor)[0]]),
-          tf.shape(input=tensor))
-      tensor = tf.compat.v1.where(
-          tf.less(rank, tf.cast(size, tf.int32)), tensor,
-          tf.fill(tf.shape(input=tensor), tf.cast(v, tensor.dtype)))
+      rank = tf.reshape(tf.tile(tf.range(num_frames), [batch_size]), tf.shape(input=tensor))
+
+      if isinstance(scalar, (int, float, str)): v = [v]
+      fill = tf.tile(   # [batch_size, num_frames, feature_size]
+          tf.constant(v, shape=(1, 1, len(v)), dtype=tensor.dtype),
+          [batch_size, num_frames, 1])
+      print(k, tensor, fill)
+      tensor = tf.compat.v1.where(tf.less(rank, tf.cast(size, tf.int32)), tensor, fill)
       examples[k] = tensor
 
     list_size_arg = list_size
@@ -556,11 +561,11 @@ class _SequenceExampleParser(_RankingDataParser):
         if isinstance(t, tf.sparse.SparseTensor):
           return tf.sparse.reset_shape(t, new_shape)
         else:
-          # Paddings has shape [n, 2] where n is the rank of the tensor.
-          paddings = tf.stack([[0, 0], [0, list_size - num_frames]] + [[0, 0]] *
-                              (ndims - 2))
-          return tf.pad(
-              tensor=t, paddings=paddings, constant_values=padding_values[k])
+          v = [padding_values[k]] if isinstance(scalar, (int, float, str)) else padding_values[k]
+          p = tf.tile(
+            tf.constant(v, shape=(1, 1, len(v)), dtype=t.dtype),
+            [shape[0], list_size - num_frames, 1])
+          return tf.concat([t, p], axis=1)
 
       tensor = tf.cond(
           pred=num_frames > list_size, true_fn=truncate_fn, false_fn=pad_fn)
