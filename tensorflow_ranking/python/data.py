@@ -460,11 +460,11 @@ def parse_from_example_list(serialized,
 def _get_scalar_default_value(dtype, default_value):
   """Gets the scalar compatible default value."""
   if dtype == tf.string:
-    return default_value or ""
+    return (default_value or "",)
   elif default_value is None:
-    return 0
+    return (0,)
   elif isinstance(default_value, int) or isinstance(default_value, float):
-    return default_value
+    return (default_value,)
   elif isinstance(default_value, list) or isinstance(default_value, tuple):
     return default_value
   else:
@@ -495,7 +495,7 @@ class _SequenceExampleParser(_RankingDataParser):
           s.shape, s.dtype, allow_missing=True)
       scalar = _get_scalar_default_value(s.dtype, s.default_value)
       padding_values[k] = scalar
-      if scalar:
+      if any(scalar):
         non_trivial_padding_values[k] = scalar
 
     sequence_features = example_feature_spec.copy()
@@ -520,7 +520,6 @@ class _SequenceExampleParser(_RankingDataParser):
       fill = tf.tile(   # [batch_size, num_frames, feature_size]
           tf.constant(v, shape=(1, 1, len(v)), dtype=tensor.dtype),
           [batch_size, num_frames, 1])
-      print(k, tensor, fill)
       tensor = tf.compat.v1.where(tf.less(rank, tf.cast(size, tf.int32)), tensor, fill)
       examples[k] = tensor
 
