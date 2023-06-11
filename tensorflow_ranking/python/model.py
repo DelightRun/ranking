@@ -131,6 +131,13 @@ class _RankingModel(object):
     logits = self._compute_logits_impl(context_features, example_features,
                                        labels, mode, params, config)
 
+    with tf.compat.v1.name_scope('output'):
+      if isinstance(logits, dict):
+        for name, logit in logits.items():
+          logits[name] = tf.identity(logit, name='score')
+      else:
+        logits = tf.identity(logits, name='score')
+
     if mode == tf.estimator.ModeKeys.PREDICT:
       return logits
     else:
