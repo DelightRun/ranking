@@ -252,15 +252,7 @@ def _form_group_indices_nd(is_valid, group_size, shuffle=False, seed=None):
 def _infer_sizes(example_features, labels):
   """Infers batch_size, list_size, and is_valid based on inputs."""
   with tf.compat.v1.name_scope('infer_sizes'):
-    if labels is not None:
-      if isinstance(labels, dict):
-        labels = next(six.itervalues(labels))
-      batch_size, list_size = tf.unstack(tf.shape(input=labels))
-      is_valid = utils.is_label_valid(labels)
-    else:
-      if not example_features:
-        raise ValueError('`example_features` is empty.')
-
+    if example_features is not None:
       # Infer batch_size and list_size from a feature.
       example_tensor_shape = tf.shape(
           input=next(six.itervalues(example_features)))
@@ -269,6 +261,14 @@ def _infer_sizes(example_features, labels):
       # Mark all entries as valid in case we don't have enough information.
       # TODO: Be more smart to infer is_valid.
       is_valid = utils.is_label_valid(tf.ones([batch_size, list_size]))
+    elif labels is not None:
+      if isinstance(labels, dict):
+        labels = next(six.itervalues(labels))
+      batch_size, list_size = tf.unstack(tf.shape(input=labels))
+      is_valid = utils.is_label_valid(labels)
+    else:
+      raise ValueError('`example_features` is empty.')
+
   if batch_size is None or list_size is None:
     raise ValueError('Invalid batch_size=%s or list_size=%s' %
                      (batch_size, list_size))
@@ -473,7 +473,7 @@ class _ListwiseRankingModel(_RankingModel):
         # Reset invalid scores to 0 based on mask.
         def _process_scores(task_scores):
           """A subroutine to mask scores for a single Tensor."""
-          if task_scores.get_shape().with_rank(2):  # single doc scoring
+          if task_scores.get_shape().rank == 2:  # single doc scoring
             return tf.compat.v1.where(is_valid,
                                       task_scores,
                                       tf.zeros_like(task_scores))
