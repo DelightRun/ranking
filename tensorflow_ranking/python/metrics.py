@@ -49,6 +49,12 @@ class RankingMetricKey(object):
   # Ordered Pair Accuracy.
   ORDERED_PAIR_ACCURACY = 'ordered_pair_accuracy'
 
+  # Group AUC
+  GAUC = 'gauc'
+
+  # AUC
+  AUC = 'auc'
+
 
 def make_ranking_metric_fn(metric_key,
                            weights_feature_name=None,
@@ -124,6 +130,14 @@ def make_ranking_metric_fn(metric_key,
     return ordered_pair_accuracy(
         labels, predictions, weights=_get_weights(features), name=name)
 
+  def _group_auc_fn(labels, predictions, features):
+    return group_auc(
+        labels, predictions, weights=_get_weights(features), name=name)
+
+  def _auc_fn(labels, predictions, features):
+    return auc(
+        labels, predictions, weights=_get_weights(features), name=name)
+
   metric_fn_dict = {
       RankingMetricKey.ARP: _average_relevance_position_fn,
       RankingMetricKey.MRR: _mean_reciprocal_rank_fn,
@@ -131,6 +145,8 @@ def make_ranking_metric_fn(metric_key,
       RankingMetricKey.DCG: _discounted_cumulative_gain_fn,
       RankingMetricKey.PRECISION: _precision_fn,
       RankingMetricKey.ORDERED_PAIR_ACCURACY: _ordered_pair_accuracy_fn,
+      RankingMetricKey.GAUC: _group_auc_fn,
+      RankingMetricKey.AUC: _auc_fn,
   }
   assert metric_key in metric_fn_dict, ('metric_key %s not supported.' %
                                         metric_key)
@@ -198,16 +214,16 @@ def _prepare_and_validate_params(labels, predictions, weights=None, topn=None):
   example_weights = tf.ones_like(labels) * weights
   predictions.get_shape().assert_is_compatible_with(example_weights.get_shape())
   predictions.get_shape().assert_is_compatible_with(labels.get_shape())
-  predictions.get_shape().assert_has_rank(2)
-  if topn is None:
-    topn = tf.shape(input=predictions)[1]
+  if predictions.get_shape().rank == 2:
+    if topn is None:
+      topn = tf.shape(input=predictions)[1]
 
-  # All labels should be >= 0. Invalid entries are reset.
-  is_label_valid = utils.is_label_valid(labels)
-  labels = tf.compat.v1.where(is_label_valid, labels, tf.zeros_like(labels))
-  predictions = tf.compat.v1.where(
-      is_label_valid, predictions, -1e-6 * tf.ones_like(predictions) +
-      tf.reduce_min(input_tensor=predictions, axis=1, keepdims=True))
+    # All labels should be >= 0. Invalid entries are reset.
+    is_label_valid = utils.is_label_valid(labels)
+    labels = tf.compat.v1.where(is_label_valid, labels, tf.zeros_like(labels))
+    predictions = tf.compat.v1.where(
+        is_label_valid, predictions, -1e-6 * tf.ones_like(predictions) +
+        tf.reduce_min(input_tensor=predictions, axis=1, keepdims=True))
   return labels, predictions, example_weights, topn
 
 
@@ -567,5 +583,119 @@ def ordered_pair_accuracy(labels, predictions, weights=None, name=None):
   """
   metric = _OPAMetric(name)
   with tf.compat.v1.name_scope(metric.name, 'ordered_pair_accuracy',
+                               (labels, predictions, weights)):
+    return metric.compute(labels, predictions, weights)
+
+
+class _GAUCMetric(_RankingMetric):
+  """Implements ordered pair accuracy (OPA)."""
+
+  def __init__(self, name):
+    """Constructor."""
+    self._name = name
+
+  @property
+  def name(self):
+    """The metric name."""
+    return self._name
+
+  def compute(self, labels, predictions, weights):
+    """See `_RankingMetric`."""
+    clean_labels, predictions, weights, _ = _prepare_and_validate_params(
+        labels, predictions, weights)
+    label_valid = tf.equal(clean_labels, labels)
+    valid_pair = tf.logical_and(
+        tf.expand_dims(label_valid, 2), tf.expand_dims(label_valid, 1))
+    pair_label_diff = tf.expand_dims(clean_labels, 2) - tf.expand_dims(
+        clean_labels, 1)
+    pair_pred_diff = tf.expand_dims(predictions, 2) - tf.expand_dims(
+        predictions, 1)
+    # Correct pairs are represented twice in the above pair difference tensors.
+    # We only take one copy for each pair.
+    correct_pairs = tf.cast(
+        pair_label_diff > 0, dtype=tf.float32) * tf.cast(
+            pair_pred_diff > 0, dtype=tf.float32)
+    pair_weights = tf.cast(
+        pair_label_diff > 0, dtype=tf.float32) * tf.expand_dims(
+            weights, 2) * tf.cast(
+                valid_pair, dtype=tf.float32)
+
+    total_correct_pairs = tf.reduce_sum(correct_pairs, axis=[1, 2])
+    total_pair_weights = tf.reduce_sum(pair_weights, axis=[1, 2])
+
+    auc = tf.compat.v1.math.divide_no_nan(total_correct_pairs, total_pair_weights)
+    weight = tf.where(total_pair_weights > 0,
+        tf.reduce_sum(tf.cast(label_valid, dtype=tf.float32), axis=1),
+        tf.zeros_like(auc))
+
+    return tf.compat.v1.metrics.mean(auc, weight)
+
+
+def group_auc(labels, predictions, weights=None, name=None):
+  """Computes the percentage of correctedly ordered pair.
+
+  For any pair of examples, we compare their orders determined by `labels` and
+  `predictions`. They are correctly ordered if the two orders are compatible.
+  That is, labels l_i > l_j and predictions s_i > s_j and the weight for this
+  pair is the weight from the l_i.
+
+  Args:
+    labels: A `Tensor` of the same shape as `predictions`.
+    predictions: A `Tensor` with shape [batch_size, list_size]. Each value is
+      the ranking score of the corresponding example.
+    weights: A `Tensor` of the same shape of predictions or [batch_size, 1]. The
+      former case is per-example and the latter case is per-list.
+    name: A string used as the name for this metric.
+
+  Returns:
+    A metric for the accuracy or ordered pairs.
+  """
+  metric = _GAUCMetric(name)
+  with tf.compat.v1.name_scope(metric.name, 'group_auc',
+                               (labels, predictions, weights)):
+    return metric.compute(labels, predictions, weights)
+
+
+class _AUCMetric(_RankingMetric):
+  """Implements ordered pair accuracy (OPA)."""
+
+  def __init__(self, name):
+    """Constructor."""
+    self._name = name
+
+  @property
+  def name(self):
+    """The metric name."""
+    return self._name
+
+  def compute(self, labels, predictions, weights):
+    """See `_RankingMetric`."""
+    labels, predictions, weights, _ = _prepare_and_validate_params(
+        labels, predictions, weights)
+    predictions = tf.sigmoid(predictions)
+    return tf.compat.v1.metrics.auc(labels, predictions, weights)
+
+
+def auc(labels, predictions, weights=None, name=None):
+  """Computes the percentage of correctedly ordered pair.
+
+  For any pair of examples, we compare their orders determined by `labels` and
+  `predictions`. They are correctly ordered if the two orders are compatible.
+  That is, labels l_i > l_j and predictions s_i > s_j and the weight for this
+  pair is the weight from the l_i.
+
+  Args:
+    labels: A `Tensor` of the same shape as `predictions`.
+    predictions: A `Tensor` with shape [batch_size, list_size]. Each value is
+      the ranking score of the corresponding example.
+    weights: A `Tensor` of the same shape of predictions or [batch_size, 1]. The
+      former case is per-example and the latter case is per-list.
+    name: A string used as the name for this metric.
+
+  Returns:
+    A metric for the accuracy or ordered pairs.
+  """
+  metric = _AUCMetric(name)
+  with tf.compat.v1.name_scope(metric.name, 'auc',
                                (labels, predictions, weights)):
     return metric.compute(labels, predictions, weights)
