@@ -134,9 +134,9 @@ class _RankingModel(object):
     with tf.compat.v1.name_scope('output'):
       if isinstance(logits, dict):
         for name, logit in logits.items():
-          logits[name] = tf.identity(logit, name='score')
+          logits[name] = tf.identity(logit, name=name)
       else:
-        logits = tf.identity(logits, name='score')
+        logits = tf.identity(logits, name=name)
 
     if mode == tf.estimator.ModeKeys.PREDICT:
       return logits
