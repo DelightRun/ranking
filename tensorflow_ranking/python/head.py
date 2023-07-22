@@ -422,7 +422,7 @@ class _MultiRankingHead(_AbstractRankingHead):
       regularized_training_loss = (
           merged_training_loss + regularization_loss
           if regularization_loss is not None else merged_training_loss)
-    return regularized_training_loss
+    return regularized_training_loss, training_losses, head_weighted_training_losses
 
   def _merge_metrics(self, all_estimator_spec):
     """Merges the eval metrics from all heads."""
@@ -460,10 +460,17 @@ class _MultiRankingHead(_AbstractRankingHead):
             mode=mode, predictions=logits, export_outputs=export_outputs)
 
       # Compute the merged loss and eval metrics.
-      loss = self._merge_loss(labels, logits, features, mode,
-                              regularization_losses)
+      loss, original_losses, weighted_losses = self._merge_loss(
+          labels, logits, features, mode, regularization_losses)
       eval_metric_ops = self._merge_metrics(all_estimator_spec)
 
+    # Log loss for each head
+    for i in range(len(self._heads)):
+      head = self._heads[i]
+      tf.python.summary.scalar("loss/original/{}".format(head.name), original_losses[i])
+      tf.python.summary.scalar("loss/weighted/{}".format(head.name), weighted_losses[i])
+
+    with tf.compat.v1.name_scope(self.name, 'multi_head'):
       # Eval.
       if mode == tf.estimator.ModeKeys.EVAL:
         return tf.estimator.EstimatorSpec(
