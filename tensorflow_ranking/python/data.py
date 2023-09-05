@@ -747,11 +747,12 @@ def build_ranking_dataset_with_parsing_fn(file_pattern,
                                           shuffle=True,
                                           shuffle_buffer_size=1000,
                                           shuffle_seed=None,
-                                          prefetch_buffer_size=32,
-                                          reader_num_threads=10,
-                                          sloppy_ordering=True,
+                                          prefetch_buffer_size=tf.data.experimental.AUTOTUNE,
+                                          reader_num_threads=tf.data.experimental.AUTOTUNE,
+                                          sloppy_ordering=False,
                                           drop_final_batch=False,
-                                          num_parser_threads=None):
+                                          num_parser_threads=tf.data.experimental.AUTOTUNE,
+                                          from_file_list=False):
   """Builds a ranking tf.dataset using the provided `parsing_fn`.
 
   Args:
@@ -792,15 +793,29 @@ def build_ranking_dataset_with_parsing_fn(file_pattern,
     A dataset of `dict` elements. Each `dict` maps feature keys to
     `Tensor` or `SparseTensor` objects.
   """
-  files = tf.data.Dataset.list_files(
-      file_pattern, shuffle=shuffle, seed=shuffle_seed)
+  if from_file_list:
+    if not isinstance(file_pattern, list):
+      raise ValueError("Input file_pattern must be a list of globbed files when"
+                       " from_file_list is set to True.")
+    dataset = tf.data.Dataset.from_tensor_slices(file_pattern)
+  else:
+    dataset = tf.data.Dataset.list_files(
+        file_pattern, shuffle=shuffle, seed=shuffle_seed)
 
-  reader_args = reader_args or []
-  dataset = files.apply(
-      tf.data.experimental.parallel_interleave(
-          lambda filename: reader(filename, *reader_args),
-          cycle_length=reader_num_threads,
-          sloppy=sloppy_ordering))
+  if reader_num_threads == tf.data.experimental.AUTOTUNE:
+    dataset = dataset.interleave(
+        lambda filename: reader(filename, *(reader_args or [])),
+        num_parallel_calls=reader_num_threads)
+  else:
+    # cycle_length needs to be set when reader_num_threads is not AUTOTUNE.
+    dataset = dataset.interleave(
+        lambda filename: reader(filename, *(reader_args or [])),
+        cycle_length=reader_num_threads,
+        num_parallel_calls=reader_num_threads)
+
+  options = tf.data.Options()
+  options.experimental_deterministic = not sloppy_ordering
+  dataset = dataset.with_options(options)
 
   # Extract values if tensors are stored as key-value tuples. This happens when
   # the reader is tf.data.SSTableDataset.
