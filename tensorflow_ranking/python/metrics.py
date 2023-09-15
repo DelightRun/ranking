@@ -623,9 +623,11 @@ class _GAUCMetric(_RankingMetric):
     total_correct_pairs = tf.reduce_sum(correct_pairs, axis=[1, 2])
     total_pair_weights = tf.reduce_sum(pair_weights, axis=[1, 2])
 
-    auc = tf.compat.v1.math.divide_no_nan(total_correct_pairs, total_pair_weights)
+    weights = weights * tf.cast(label_valid, dtype=tf.float32)
+    auc = tf.expand_dims(tf.compat.v1.math.divide_no_nan(
+        total_correct_pairs, total_pair_weights), axis=1)
     weight = tf.where(total_pair_weights > 0,
-        tf.reduce_sum(tf.cast(label_valid, dtype=tf.float32), axis=1),
+        tf.reduce_sum(weights, axis=1, keepdims=True),
         tf.zeros_like(auc))
 
     return tf.compat.v1.metrics.mean(auc, weight)
@@ -670,9 +672,17 @@ class _AUCMetric(_RankingMetric):
 
   def compute(self, labels, predictions, weights):
     """See `_RankingMetric`."""
-    labels, predictions, weights, _ = _prepare_and_validate_params(
-        labels, predictions, weights)
     predictions = tf.sigmoid(predictions)
+
+    if labels.get_shape().rank == 2:
+      clean_labels, predictions, weights, _ = _prepare_and_validate_params(
+          labels, predictions, weights)
+      label_valid = tf.equal(clean_labels, labels)
+      label_valid = tf.cast(label_valid, tf.float32)
+
+      labels *= label_valid
+      predictions *= label_valid
+      weights *= label_valid
     return tf.compat.v1.metrics.auc(labels, predictions, weights)
 
 
