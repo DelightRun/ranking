@@ -251,9 +251,23 @@ def _form_group_indices_nd(is_valid, group_size, shuffle=False, seed=None):
 
 def _infer_sizes(example_features, labels, mask_feature=None, length_feature=None):
   """Infers batch_size, list_size, and is_valid based on inputs."""
+
   with tf.compat.v1.name_scope('infer_sizes'):
-    if example_features is not None:
-      tf.compat.v1.logging.info('Use feature to infer size info')
+    infer_from_labels = labels is not None and (
+      example_features is None or (mask_feature is None and length_feature is None)
+    )
+
+    if infer_from_labels:
+      if isinstance(labels, dict):
+        key = next(six.iterkeys(labels))
+        label = labels[key]
+      else:
+        key = None
+        label = labels
+      tf.compat.v1.logging.info('Use label to infer size info: {}'.format(key))
+      batch_size, list_size = tf.unstack(tf.shape(input=label))
+      is_valid = utils.is_label_valid(label)
+    elif example_features is not None:
       if mask_feature is not None:
         tf.compat.v1.logging.info('Found mask feature to infer sizes: {}'.format(mask_feature))
         example_tensor = example_features[mask_feature]
@@ -279,12 +293,6 @@ def _infer_sizes(example_features, labels, mask_feature=None, length_feature=Non
       else:
         tf.compat.v1.logging.warn("Mark all entries as valid in case we don't have enough information.")
         is_valid = utils.is_label_valid(tf.ones([batch_size, list_size]))
-    elif labels is not None:
-      tf.compat.v1.logging.info('Use label to infer size info')
-      if isinstance(labels, dict):
-        labels = next(six.itervalues(labels))
-      batch_size, list_size = tf.unstack(tf.shape(input=labels))
-      is_valid = utils.is_label_valid(labels)
     else:
       raise ValueError('`example_features` is empty.')
 
