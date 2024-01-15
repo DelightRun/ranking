@@ -249,19 +249,38 @@ def _form_group_indices_nd(is_valid, group_size, shuffle=False, seed=None):
     return indices, mask
 
 
-def _infer_sizes(example_features, labels):
+def _infer_sizes(example_features, labels, mask_feature=None, length_feature=None):
   """Infers batch_size, list_size, and is_valid based on inputs."""
   with tf.compat.v1.name_scope('infer_sizes'):
     if example_features is not None:
+      tf.compat.v1.logging.info('Use feature to infer size info')
+      if mask_feature is not None:
+        tf.compat.v1.logging.info('Found mask feature to infer sizes: {}'.format(mask_feature))
+        example_tensor = example_features[mask_feature]
+      else:
+        tf.compat.v1.logging.info('No mask feature to infer sizes, use first')
+        example_tensor = next(six.itervalues(example_features))
+
       # Infer batch_size and list_size from a feature.
-      example_tensor_shape = tf.shape(
-          input=next(six.itervalues(example_features)))
+      example_tensor_shape = tf.shape(input=example_tensor)
       batch_size = example_tensor_shape[0]
       list_size = example_tensor_shape[1]
-      # Mark all entries as valid in case we don't have enough information.
-      # TODO: Be more smart to infer is_valid.
-      is_valid = utils.is_label_valid(tf.ones([batch_size, list_size]))
+
+      # Get validation mask from length_feature or mask_feature
+      if length_feature is not None:
+        tf.compat.v1.logging.info('Use length feature to get validation mask: {}'.format(length_feature))
+        length_tensor = tf.squeeze(example_features[length_feature])
+        is_valid = tf.sequence_mask(length_tensor, maxlen=list_size)
+      elif mask_feature is not None:
+        tf.compat.v1.logging.info('Use mask feature to get validation mask: {}'.format(mask_feature))
+        is_valid = tf.reshape(example_features[mask_feature], [batch_size, list_size])
+        if is_valid.dtype != tf.bool:
+          is_valid = tf.greater_equal(is_valid, 0)
+      else:
+        tf.compat.v1.logging.warn("Mark all entries as valid in case we don't have enough information.")
+        is_valid = utils.is_label_valid(tf.ones([batch_size, list_size]))
     elif labels is not None:
+      tf.compat.v1.logging.info('Use label to infer size info')
       if isinstance(labels, dict):
         labels = next(six.itervalues(labels))
       batch_size, list_size = tf.unstack(tf.shape(input=labels))
@@ -427,7 +446,10 @@ class _GroupwiseRankingModel(_RankingModel):
 class _ListwiseRankingModel(_RankingModel):
   """Ranking model for groupwise scoring functions."""
 
-  def __init__(self, score_fn, list_size, transform_fn=None):
+  def __init__(self, score_fn, list_size,
+               mask_feature_name=None,
+               length_feature_name=None,
+               transform_fn=None):
     """Constructor for groupwise ranking model.
 
     Args:
@@ -447,6 +469,8 @@ class _ListwiseRankingModel(_RankingModel):
           score for each example/list, or a `dict` of Tensors with the above shape in
           multi-task setting.
       list_size: An integer denoting the number of examples in `score_fn`.
+      mask_feature_name: A string denoting the name of the feature which represents
+        the validation of examples in `score_fn`.
       transform_fn: See `_RankingModel`.
 
     Raises:
@@ -456,13 +480,19 @@ class _ListwiseRankingModel(_RankingModel):
     if list_size <= 0:
       raise ValueError('Invalid list_size %d' % list_size)
     self._list_size = list_size
+    self._mask_feature_name = mask_feature_name
+    self._length_feature_name = length_feature_name
     self._score_fn = score_fn
 
   def _compute_logits_impl(self, context_features, example_features, labels,
                            mode, params, config):
     # Each list are scored by '_score_fn', and return list_size scores.
     with tf.compat.v1.name_scope('listwise_dnn'):
-      size_info = batch_size, list_size, is_valid = _infer_sizes(example_features, labels)
+      batch_size, list_size, is_valid = _infer_sizes(
+        example_features, labels,
+        self._mask_feature_name, self._length_feature_name)
+
+      size_info = batch_size, list_size, is_valid
 
       # Do the inference and get scores for the batch of [batch_size, list_size]
       with tf.compat.v1.variable_scope('list_score'):
@@ -545,6 +575,8 @@ def make_groupwise_ranking_fn(group_score_fn,
 def make_listwise_ranking_fn(score_fn,
                              list_size,
                              ranking_head,
+                             mask_feature_name=None,
+                             length_feature_name=None,
                              transform_fn=None):
   """Builds an `Estimator` model_fn for listwise ranking models.
 
@@ -558,7 +590,9 @@ def make_listwise_ranking_fn(score_fn,
     See `_make_model_fn`.
   """
 
-  tf.compat.v1.logging.info('Building groupwise ranking model.')
+  tf.compat.v1.logging.info('Building listwise ranking model.')
   ranking_model = _ListwiseRankingModel(score_fn, list_size,
+                                        mask_feature_name,
+                                        length_feature_name,
                                         transform_fn)
   return _make_model_fn(ranking_model, ranking_head)
