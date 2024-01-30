@@ -97,6 +97,7 @@ class _RankingDataParser(object):
 
   def __init__(self,
                list_size=None,
+               sort_opt=None,
                context_feature_spec=None,
                example_feature_spec=None):
     """Constructor."""
@@ -107,6 +108,7 @@ class _RankingDataParser(object):
       self._list_size = None
     else:
       self._list_size = list_size
+    self._sort_opt = sort_opt
     self._context_feature_spec = context_feature_spec
     self._example_feature_spec = example_feature_spec
 
@@ -172,6 +174,7 @@ class _ExampleInExampleParser(_RankingDataParser):
 
 def parse_from_example_in_example(serialized,
                                   list_size=None,
+                                  sort_opt=None,
                                   context_feature_spec=None,
                                   example_feature_spec=None):
   """Parses an ExampleInExample batch to a feature map.
@@ -315,7 +318,8 @@ def parse_from_example_in_example(serialized,
   Returns:
     A mapping from feature keys to `Tensor` or `SparseTensor`.
   """
-  parser = _ExampleInExampleParser(list_size, context_feature_spec,
+  parser = _ExampleInExampleParser(list_size, sort_opt,
+                                   context_feature_spec,
                                    example_feature_spec)
   return parser.parse(serialized)
 
@@ -330,6 +334,7 @@ class _ExampleListParser(_ExampleInExampleParser):
 
 def parse_from_example_list(serialized,
                             list_size=None,
+                            sort_opt=None,
                             context_feature_spec=None,
                             example_feature_spec=None):
   """Parses an `ExampleListWithContext` batch to a feature map.
@@ -452,7 +457,8 @@ def parse_from_example_list(serialized,
   Returns:
     A mapping from feature keys to `Tensor` or `SparseTensor`.
   """
-  parser = _ExampleListParser(list_size, context_feature_spec,
+  parser = _ExampleListParser(list_size, sort_opt,
+                              context_feature_spec,
                               example_feature_spec)
   return parser.parse(serialized)
 
@@ -504,6 +510,27 @@ class _SequenceExampleParser(_RankingDataParser):
         serialized,
         context_features=context_feature_spec,
         sequence_features=sequence_features)
+
+    if isinstance(self._sort_opt, (tuple, list)) and len(self._sort_opt) == 2:
+      key, descending = self._sort_opt
+      direction = "DESCENDING" if descending else "ASCENDING"
+      keys = tf.squeeze(examples[key], axis=-1)
+      indices = tf.argsort(keys, axis=1, direction=direction, stable=True)
+
+      def _sort_fn(v):
+        if isinstance(v, tf.SparseTensor):
+          v = tf.sparse.to_dense(v)
+          v = tf.gather(v, indices, axis=1, batch_dims=1)
+          return tf.sparse.from_dense(v)
+        else:
+          return tf.gather(v, indices, axis=1, batch_dims=1)
+
+      for k, v in examples.items():
+        with tf.name_scope("sort/" + k):
+          examples[k] = tf.cond(
+            pred=tf.size(v) > 0,
+            true_fn=lambda: _sort_fn(v),
+            false_fn=lambda: v)
 
     # Reset to no trivial padding values for example features.
     for k, v in six.iteritems(non_trivial_padding_values):
@@ -581,6 +608,7 @@ class _SequenceExampleParser(_RankingDataParser):
 
 def parse_from_sequence_example(serialized,
                                 list_size=None,
+                                sort_opt=None,
                                 context_feature_spec=None,
                                 example_feature_spec=None):
   """Parses SequenceExample to feature maps.
@@ -696,13 +724,15 @@ def parse_from_sequence_example(serialized,
   Returns:
     A mapping from feature keys to `Tensor` or `SparseTensor`.
   """
-  parser = _SequenceExampleParser(list_size, context_feature_spec,
+  parser = _SequenceExampleParser(list_size, sort_opt,
+                                  context_feature_spec,
                                   example_feature_spec)
   return parser.parse(serialized)
 
 
 def make_parsing_fn(data_format,
                     list_size=None,
+                    sort_opt=None,
                     context_feature_spec=None,
                     example_feature_spec=None):
   """Returns a parsing fn for a standard data format.
@@ -724,6 +754,7 @@ def make_parsing_fn(data_format,
   """
   kwargs = {
       "list_size": list_size,
+      "sort_opt": sort_opt,
       "context_feature_spec": context_feature_spec,
       "example_feature_spec": example_feature_spec,
   }
@@ -848,6 +879,7 @@ def build_ranking_dataset(file_pattern,
                           context_feature_spec,
                           example_feature_spec,
                           list_size=None,
+                          sort_opt=None,
                           **kwargs):
   """Builds a ranking tf.dataset with a standard data format.
 
@@ -863,8 +895,12 @@ def build_ranking_dataset(file_pattern,
   Returns:
     See `build_ranking_dataset_with_parsing_fn`.
   """
-  parsing_fn = make_parsing_fn(data_format, list_size, context_feature_spec,
-                               example_feature_spec)
+  parsing_fn = make_parsing_fn(
+      data_format,
+      list_size=list_size,
+      sort_opt=sort_opt,
+      context_feature_spec=context_feature_spec,
+      example_feature_spec=example_feature_spec)
   return build_ranking_dataset_with_parsing_fn(
       file_pattern, parsing_fn=parsing_fn, batch_size=batch_size, **kwargs)
 
