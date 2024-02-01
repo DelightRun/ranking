@@ -84,6 +84,8 @@ def make_ranking_metric_fn(metric_key,
     weights = None
     if weights_feature_name:
       weights = tf.convert_to_tensor(value=features[weights_feature_name])
+      # Cast to float32
+      weights = tf.cast(weights, dtype=tf.float32)
       # Convert weights to a 2-D Tensor.
       weights = utils.reshape_to_2d(weights)
     return weights
@@ -211,7 +213,7 @@ def _prepare_and_validate_params(labels, predictions, weights=None, topn=None):
   labels = tf.convert_to_tensor(value=labels)
   predictions = tf.convert_to_tensor(value=predictions)
   weights = 1.0 if weights is None else tf.convert_to_tensor(value=weights)
-  example_weights = tf.ones_like(labels) * weights
+  example_weights = tf.ones_like(labels, dtype=tf.float32) * weights
   predictions.get_shape().assert_is_compatible_with(example_weights.get_shape())
   predictions.get_shape().assert_is_compatible_with(labels.get_shape())
   if predictions.get_shape().rank == 2:
