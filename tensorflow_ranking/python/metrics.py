@@ -37,6 +37,9 @@ class RankingMetricKey(object):
   # Average Relvance Position.
   ARP = 'arp'
 
+  # Average Relevance Value.
+  ARV = 'arv'
+
   # Normalized Discounted Culmulative Gain.
   NDCG = 'ndcg'
 
@@ -100,6 +103,15 @@ def make_ranking_metric_fn(metric_key,
     return mean_reciprocal_rank(
         labels, predictions, weights=_get_weights(features), name=name)
 
+  def _average_relevance_value_fn(labels, predictions, features):
+    """Returns average relevance position as the metric."""
+    return average_relevance_value(
+        labels,
+        predictions,
+        weights=_get_weights(features),
+        topn=topn,
+        name=name)
+
   def _normalized_discounted_cumulative_gain_fn(labels, predictions, features):
     """Returns normalized discounted cumulative gain as the metric."""
     return normalized_discounted_cumulative_gain(
@@ -142,6 +154,7 @@ def make_ranking_metric_fn(metric_key,
 
   metric_fn_dict = {
       RankingMetricKey.ARP: _average_relevance_position_fn,
+      RankingMetricKey.ARV: _average_relevance_value_fn,
       RankingMetricKey.MRR: _mean_reciprocal_rank_fn,
       RankingMetricKey.NDCG: _normalized_discounted_cumulative_gain_fn,
       RankingMetricKey.DCG: _discounted_cumulative_gain_fn,
@@ -355,6 +368,50 @@ def average_relevance_position(labels, predictions, weights=None, name=None):
   """
   metric = _ARPMetric(name)
   with tf.compat.v1.name_scope(metric.name, 'average_relevance_position',
+                               (labels, predictions, weights)):
+    return metric.compute(labels, predictions, weights)
+
+
+class _ARVMetric(_RankingMetric):
+  """Implements average relevance value (ARV)."""
+
+  def __init__(self, name, topn):
+    """Constructor."""
+    self._name = name
+    self._topn = topn
+
+  @property
+  def name(self):
+    """The metric name."""
+    return self._name
+
+  def compute(self, labels, predictions, weights):
+    """See `_RankingMetric`."""
+    labels, predictions, weights, topn = _prepare_and_validate_params(
+        labels, predictions, weights, self._topn)
+    sorted_labels, sorted_weights = utils.sort_by_scores(
+        predictions, [labels, weights], topn=topn)
+    return tf.compat.v1.metrics.mean(sorted_labels, sorted_weights)
+
+
+def average_relevance_value(labels, predictions, weights=None, topn=None, name=None):
+  """Computes precision as weighted average of examples' relevance value.
+
+  Args:
+    labels: A `Tensor` of the same shape as `predictions`. A value >= 1 means a
+      relevant example.
+    predictions: A `Tensor` with shape [batch_size, list_size]. Each value is
+      the ranking score of the corresponding example.
+    weights: A `Tensor` of the same shape of predictions or [batch_size, 1]. The
+      former case is per-example and the latter case is per-list.
+    topn: A cutoff for how many examples to consider for this metric.
+    name: A string used as the name for this metric.
+
+  Returns:
+    A metric for the weighted precision of the batch.
+  """
+  metric = _ARVMetric(name, topn)
+  with tf.compat.v1.name_scope(metric.name, 'average_relevance_value',
                                (labels, predictions, weights)):
     return metric.compute(labels, predictions, weights)
 
