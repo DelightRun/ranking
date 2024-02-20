@@ -239,6 +239,8 @@ def _prepare_and_validate_params(labels, predictions, weights=None, topn=None):
     predictions = tf.compat.v1.where(
         is_label_valid, predictions, -1e-6 * tf.ones_like(predictions) +
         tf.reduce_min(input_tensor=predictions, axis=1, keepdims=True))
+    example_weights = tf.compat.v1.where(
+        is_label_valid, example_weights, tf.zeros_like(example_weights))
   return labels, predictions, example_weights, topn
 
 
